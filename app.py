@@ -19,14 +19,12 @@ matches = defaultdict(list)
 messages = defaultdict(list)
 notifications = defaultdict(list)
 
-
 def add_notification(user_id, message):
     notifications[user_id].append({
         'id': str(uuid.uuid4()),
         'message': message,
         'timestamp': datetime.now()
     })
-
 
 def check_for_matches(user_id):
     current_profile = next((p for p in profiles if p['user_id'] == user_id), None)
@@ -44,6 +42,30 @@ def check_for_matches(user_id):
                 add_notification(user_id, f"✨ У вас мэтч с {matched_user_name}! Теперь вы можете общаться.")
                 add_notification(liked_user_id, f"✨ У вас мэтч с {user_name}! Теперь вы можете общаться.")
 
+def get_unread_messages_count(user_id):
+    count = 0
+    for chat_key, msgs in messages.items():
+        if user_id in chat_key:
+            for msg in msgs:
+                if msg['sender'] != user_id and not msg.get('read_by', {}).get(user_id, False):
+                    count += 1
+    return count
+
+def render_navbar(user_id, active=None, unread_messages=0):
+    return render_template_string('''
+    <nav style="position:fixed;top:0;left:0;width:100%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.07);z-index:100;display:flex;justify-content:center;align-items:center;padding:8px 0;">
+        <a href="/visitors" style="margin:0 10px;{{'font-weight:bold;color:#ff6b6b;' if active=='visitors' else ''}}">👥 Посетители</a>
+        <a href="/my_likes" style="margin:0 10px;{{'font-weight:bold;color:#ff6b6b;' if active=='likes' else ''}}">❤️</a>
+        <a href="/my_matches" style="margin:0 10px;{{'font-weight:bold;color:#ff6b6b;' if active=='matches' else ''}}">🤝 Мэтчи</a>
+        <a href="/my_messages" style="margin:0 10px;position:relative;{{'font-weight:bold;color:#ff6b6b;' if active=='messages' else ''}}">
+            ✉️
+            {% if unread_messages > 0 %}
+                <span style="position:absolute;top:-8px;right:-8px;background:#ff6b6b;color:#fff;border-radius:50%;padding:2px 7px;font-size:0.8em;">{{ unread_messages }}</span>
+            {% endif %}
+        </a>
+    </nav>
+    <div style="height:48px"></div>
+    ''', active=active, unread_messages=unread_messages)
 
 @app.route('/')
 def home():
@@ -54,6 +76,7 @@ def home():
         n for n in user_notifications
         if datetime.now() - n['timestamp'] < timedelta(minutes=5)
     ]
+    navbar = render_navbar(user_id, active=None, unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -92,6 +115,7 @@ def home():
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             {% for notification in unread_notifications %}
                 <div class="notification">{{ notification.message }}</div>
             {% endfor %}
@@ -105,14 +129,10 @@ def home():
                 {% else %}
                     <a href="/my_profile" class="modern-btn">Моя анкета</a>
                 {% endif %}
-                <a href="/visitors" class="modern-btn">Посмотреть посетителей</a>
-                <a href="/my_likes" class="modern-btn">Мои лайки</a>
-                <a href="/my_matches" class="modern-btn">Мои мэтчи</a>
             </div>
         </body>
         </html>
-    ''', has_profile=has_profile, user_id=user_id, unread_notifications=unread_notifications)
-
+    ''', has_profile=has_profile, user_id=user_id, unread_notifications=unread_notifications, navbar=navbar)
 
 @app.route('/create', methods=['GET', 'POST'])
 def create_profile():
@@ -141,6 +161,7 @@ def create_profile():
             resp = make_response(redirect(url_for('view_profile', id=profile['id'])))
             resp.set_cookie('user_id', user_id)
             return resp
+    navbar = render_navbar(user_id, active=None, unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -186,6 +207,7 @@ def create_profile():
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             <h2>Создать анкету</h2>
             <form method="post" enctype="multipart/form-data">
                 <input type="text" name="name" placeholder="Ваше имя" required>
@@ -198,19 +220,128 @@ def create_profile():
             <a href="/" class="back-btn">← На главную</a>
         </body>
         </html>
-    ''')
+    ''', navbar=navbar)
 
+@app.route('/visitors')
+def view_visitors():
+    user_id = request.cookies.get('user_id')
+    other_profiles = [p for p in profiles if p.get('user_id') != user_id]
+    liked_ids = set(likes.get(user_id, []))
+    navbar = render_navbar(user_id, active='visitors', unread_messages=get_unread_messages_count(user_id))
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Посетители кафе</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .visitor-card { 
+                    background: white; 
+                    border-radius: 10px; 
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+                    padding: 20px; 
+                    margin-bottom: 20px;
+                    display: flex;
+                    align-items: center;
+                }
+                .visitor-card img { 
+                    max-width: 80px; 
+                    border-radius: 10px; 
+                    margin-right: 15px;
+                    object-fit: cover;
+                    height: 80px;
+                }
+                .visitor-info { flex: 1; }
+                .visitor-card h2 { margin: 0 0 5px 0; }
+                .visitor-card p { margin: 5px 0; color: #666; }
+                .like-btn {
+                    background: none;
+                    border: none;
+                    cursor: pointer;
+                    outline: none;
+                    font-size: 2em;
+                    margin-left: 10px;
+                    transition: transform 0.1s;
+                }
+                .like-btn:active { transform: scale(1.2); }
+                .like-heart {
+                    color: #bbb;
+                    transition: color 0.2s;
+                }
+                .like-heart.liked {
+                    color: #ff6b6b;
+                }
+                .visitor-count {
+                    font-size: 0.9em;
+                    color: #888;
+                    margin-bottom: 10px;
+                    text-align: left;
+                }
+            </style>
+            <script>
+                function toggleLike(profileId, btn) {
+                    fetch('/toggle_like/' + profileId, {method: 'POST'})
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.liked) {
+                                btn.classList.add('liked');
+                            } else {
+                                btn.classList.remove('liked');
+                            }
+                        });
+                }
+            </script>
+        </head>
+        <body>
+            {{ navbar|safe }}
+            <div class="visitor-count">Посетителей: {{ other_profiles|length }}</div>
+            <h1>Посетители кафе</h1>
+            {% if other_profiles %}
+                {% for profile in other_profiles %}
+                    <div class="visitor-card">
+                        <img src="{{ url_for('static', filename='uploads/' + profile.photo) }}" alt="Фото">
+                        <div class="visitor-info">
+                            <h2>{{ profile.name }}, {{ profile.age }}</h2>
+                            <p>{{ profile.hobbies[:50] }}{% if profile.hobbies|length > 50 %}...{% endif %}</p>
+                            <a href="/profile/{{ profile.id }}">Посмотреть анкету</a>
+                        </div>
+                        <button class="like-btn" title="Лайк" onclick="toggleLike({{ profile.id }}, this.querySelector('span'))">
+                            <span class="like-heart{% if profile.id in liked_ids %} liked{% endif %}">&#10084;</span>
+                        </button>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>Пока нет других посетителей.</p>
+            {% endif %}
+        </body>
+        </html>
+    ''', other_profiles=other_profiles, liked_ids=liked_ids, navbar=navbar)
 
+@app.route('/toggle_like/<int:profile_id>', methods=['POST'])
+def toggle_like(profile_id):
+    user_id = request.cookies.get('user_id')
+    if not user_id or profile_id >= len(profiles) or profiles[profile_id]['user_id'] == user_id:
+        return jsonify({'liked': False})
+    if profile_id in likes[user_id]:
+        likes[user_id].remove(profile_id)
+        profiles[profile_id]['likes'] = max(0, profiles[profile_id]['likes'] - 1)
+        liked = False
+    else:
+        likes[user_id].append(profile_id)
+        profiles[profile_id]['likes'] += 1
+        check_for_matches(user_id)
+        liked = True
+    return jsonify({'liked': liked})
 @app.route('/my_profile')
 def my_profile():
     user_id = request.cookies.get('user_id')
     if not user_id:
         return redirect(url_for('home'))
-
     profile = next((p for p in profiles if p['user_id'] == user_id), None)
     if not profile:
         return redirect(url_for('create'))
-
+    navbar = render_navbar(user_id, active=None, unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -258,6 +389,7 @@ def my_profile():
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             <div class="card">
                 <img src="{{ url_for('static', filename='uploads/' + profile.photo) }}" alt="Фото">
                 <h2>{{ profile.name }}, {{ profile.age }}</h2>
@@ -271,20 +403,18 @@ def my_profile():
             </div>
         </body>
         </html>
-    ''', profile=profile)
-
+    ''', profile=profile, navbar=navbar)
 
 @app.route('/my_likes')
 def my_likes():
     user_id = request.cookies.get('user_id')
     if not user_id:
         return redirect(url_for('home'))
-
     liked_profiles = []
     for profile_id in likes.get(user_id, []):
         if profile_id < len(profiles):
             liked_profiles.append(profiles[profile_id])
-
+    navbar = render_navbar(user_id, active='likes', unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -318,6 +448,7 @@ def my_likes():
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             <h1>Мои лайки</h1>
             {% if liked_profiles %}
                 {% for profile in liked_profiles %}
@@ -330,11 +461,9 @@ def my_likes():
             {% else %}
                 <p>Вы пока никого не лайкнули.</p>
             {% endif %}
-            <a href="/" class="back-btn">← На главную</a>
         </body>
         </html>
-    ''', liked_profiles=liked_profiles)
-
+    ''', liked_profiles=liked_profiles, navbar=navbar)
 
 @app.route('/profile/<int:id>')
 def view_profile(id):
@@ -343,6 +472,7 @@ def view_profile(id):
     user_id = request.cookies.get('user_id')
     profile = profiles[id]
     is_owner = profile.get('user_id') == user_id
+    navbar = render_navbar(user_id, active=None, unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -390,6 +520,7 @@ def view_profile(id):
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             <div class="card">
                 <img src="{{ url_for('static', filename='uploads/' + profile.photo) }}" alt="Фото">
                 <h2>{{ profile.name }}, {{ profile.age }}</h2>
@@ -410,8 +541,7 @@ def view_profile(id):
             </div>
         </body>
         </html>
-    ''', profile=profile, is_owner=is_owner)
-
+    ''', profile=profile, is_owner=is_owner, navbar=navbar)
 
 @app.route('/like/<int:id>', methods=['POST'])
 def like_profile(id):
@@ -428,7 +558,6 @@ def like_profile(id):
         check_for_matches(user_id)
     return redirect(url_for('view_profile', id=id))
 
-
 @app.route('/delete/<int:id>', methods=['POST'])
 def delete_profile(id):
     if id >= len(profiles):
@@ -438,17 +567,11 @@ def delete_profile(id):
         return redirect(url_for('home'))
     if profiles[id]['user_id'] != user_id:
         return "Нельзя удалить чужую анкету", 403
-
-    # Удаляем фото
     try:
         os.remove(os.path.join(app.config['UPLOAD_FOLDER'], profiles[id]['photo']))
     except:
         pass
-
-    # Удаляем из всех списков
     profiles.pop(id)
-
-    # Обновляем индексы в likes
     for user_likes in likes.values():
         for i, liked_id in enumerate(user_likes):
             if liked_id > id:
@@ -456,9 +579,7 @@ def delete_profile(id):
             elif liked_id == id:
                 user_likes.remove(liked_id)
                 break
-
     return redirect(url_for('home'))
-
 
 @app.route('/my_matches')
 def my_matches():
@@ -470,6 +591,7 @@ def my_matches():
         profile = next((p for p in profiles if p['user_id'] == matched_user_id), None)
         if profile:
             matched_profiles.append(profile)
+    navbar = render_navbar(user_id, active='matches', unread_messages=get_unread_messages_count(user_id))
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -497,27 +619,10 @@ def my_matches():
                     box-shadow: 0 8px 24px rgba(76,175,80,0.3);
                     transform: translateY(-2px) scale(1.03);
                 }
-                .back-btn {
-                    background: linear-gradient(90deg, #6c757d 0%, #495057 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    box-shadow: 0 4px 14px rgba(108,117,125,0.2);
-                    font-size: 1.1em;
-                    cursor: pointer;
-                    transition: box-shadow 0.2s, transform 0.2s;
-                    text-decoration: none;
-                    display: inline-block;
-                    margin-top: 20px;
-                }
-                .back-btn:hover {
-                    box-shadow: 0 8px 24px rgba(108,117,125,0.3);
-                    transform: translateY(-2px) scale(1.03);
-                }
             </style>
         </head>
         <body>
+            {{ navbar|safe }}
             <h1>Мои мэтчи</h1>
             {% if matched_profiles %}
                 {% for profile in matched_profiles %}
@@ -529,13 +634,47 @@ def my_matches():
             {% else %}
                 <p>У вас пока нет мэтчей.</p>
             {% endif %}
-            <a href="/" class="back-btn">← На главную</a>
         </body>
         </html>
-    ''', matched_profiles=matched_profiles)
+    ''', matched_profiles=matched_profiles, navbar=navbar)
 
+@app.route('/my_messages')
+def my_messages():
+    user_id = request.cookies.get('user_id')
+    if not user_id:
+        return redirect(url_for('home'))
+    chat_partners = set()
+    for chat_key in messages:
+        if user_id in chat_key:
+            chat_partners.add([uid for uid in chat_key if uid != user_id][0])
+    chat_profiles = [p for p in profiles if p['user_id'] in chat_partners]
+    unread_messages = get_unread_messages_count(user_id)
+    navbar = render_navbar(user_id, active='messages', unread_messages=unread_messages)
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Мои сообщения</title>
+        </head>
+        <body>
+            {{ navbar|safe }}
+            <h1>Мои сообщения</h1>
+            {% if chat_profiles %}
+                {% for profile in chat_profiles %}
+                    <div style="background:#fff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);padding:20px;margin-bottom:20px;">
+                        <h2>{{ profile.name }}, {{ profile.age }}</h2>
+                        <a href="/chat/{{ profile.user_id }}" class="modern-btn">Открыть чат</a>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>У вас пока нет сообщений.</p>
+            {% endif %}
+        </body>
+        </html>
+    ''', chat_profiles=chat_profiles, navbar=navbar)
 
-@app.route('/chat/<string:other_user_id>')
+@app.route('/chat/<string:other_user_id>', methods=['GET', 'POST'])
 def chat(other_user_id):
     user_id = request.cookies.get('user_id')
     if not user_id:
@@ -545,7 +684,22 @@ def chat(other_user_id):
     other_profile = next((p for p in profiles if p['user_id'] == other_user_id), None)
     if not other_profile:
         return "Пользователь не найден", 404
-    chat_key = "_".join(sorted([user_id, other_user_id]))
+    chat_key = tuple(sorted([user_id, other_user_id]))
+    # Помечаем сообщения как прочитанные
+    for msg in messages[chat_key]:
+        if msg['sender'] != user_id:
+            if 'read_by' not in msg:
+                msg['read_by'] = {}
+            msg['read_by'][user_id] = True
+    navbar = render_navbar(user_id, active='messages', unread_messages=get_unread_messages_count(user_id))
+    if request.method == 'POST':
+        message = request.form.get('message')
+        if message:
+            messages[chat_key].append({
+                'sender': user_id,
+                'text': message,
+                'timestamp': datetime.now()
+            })
     return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -557,24 +711,6 @@ def chat(other_user_id):
                 .message { margin: 10px; padding: 10px; border-radius: 10px; max-width: 70%; }
                 .my-message { background: #dcf8c6; margin-left: auto; }
                 .their-message { background: white; margin-right: auto; }
-                .back-btn {
-                    background: linear-gradient(90deg, #6c757d 0%, #495057 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    box-shadow: 0 4px 14px rgba(108,117,125,0.2);
-                    font-size: 1.1em;
-                    cursor: pointer;
-                    transition: box-shadow 0.2s, transform 0.2s;
-                    text-decoration: none;
-                    display: inline-block;
-                    margin-bottom: 20px;
-                }
-                .back-btn:hover {
-                    box-shadow: 0 8px 24px rgba(108,117,125,0.3);
-                    transform: translateY(-2px) scale(1.03);
-                }
                 .modern-btn {
                     background: linear-gradient(90deg, #ff6b6b 0%, #ffb86b 100%);
                     color: white;
@@ -607,7 +743,7 @@ def chat(other_user_id):
             <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
         </head>
         <body>
-            <a href="/my_matches" class="back-btn">← Назад к мэтчам</a>
+            {{ navbar|safe }}
             <h1>Чат с {{ other_profile.name }}</h1>
             <div id="messages"></div>
             <form id="chat-form" autocomplete="off">
@@ -652,8 +788,7 @@ def chat(other_user_id):
             </script>
         </body>
         </html>
-    ''', other_profile=other_profile, user_id=user_id, chat_key=chat_key, other_user_id=other_user_id)
-
+    ''', other_profile=other_profile, user_id=user_id, chat_key='_'.join(sorted([user_id, other_user_id])), navbar=navbar)
 
 @app.route('/chat_history/<string:other_user_id>')
 def chat_history(other_user_id):
@@ -661,11 +796,9 @@ def chat_history(other_user_id):
     chat_key = tuple(sorted([user_id, other_user_id]))
     return jsonify(messages[chat_key]) if chat_key in messages else jsonify([])
 
-
 @socketio.on('join')
 def on_join(data):
     join_room(data['room'])
-
 
 @socketio.on('send_message')
 def handle_send_message(data):
@@ -680,135 +813,6 @@ def handle_send_message(data):
         'timestamp': datetime.now()
     })
     emit('message', {'text': text, 'sender': sender}, room=room)
-
-
-@app.route('/visitors')
-def view_visitors():
-    user_id = request.cookies.get('user_id')
-    other_profiles = [p for p in profiles if p.get('user_id') != user_id]
-    liked_ids = set(likes.get(user_id, []))
-    return render_template_string('''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Посетители кафе</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
-                .visitor-card { 
-                    background: white; 
-                    border-radius: 10px; 
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
-                    padding: 20px; 
-                    margin-bottom: 20px;
-                    display: flex;
-                    align-items: center;
-                }
-                .visitor-card img { 
-                    max-width: 80px; 
-                    border-radius: 10px; 
-                    margin-right: 15px;
-                    object-fit: cover;
-                    height: 80px;
-                }
-                .visitor-info { flex: 1; }
-                .visitor-card h2 { margin: 0 0 5px 0; }
-                .visitor-card p { margin: 5px 0; color: #666; }
-                .like-btn {
-                    background: none;
-                    border: none;
-                    cursor: pointer;
-                    outline: none;
-                    font-size: 2em;
-                    margin-left: 10px;
-                    transition: transform 0.1s;
-                }
-                .like-btn:active { transform: scale(1.2); }
-                .like-heart {
-                    color: #bbb;
-                    transition: color 0.2s;
-                }
-                .like-heart.liked {
-                    color: #ff6b6b;
-                }
-                .back-btn {
-                    background: linear-gradient(90deg, #6c757d 0%, #495057 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    box-shadow: 0 4px 14px rgba(108,117,125,0.2);
-                    font-size: 1.1em;
-                    cursor: pointer;
-                    transition: box-shadow 0.2s, transform 0.2s;
-                    text-decoration: none;
-                    display: inline-block;
-                    margin-top: 20px;
-                }
-                .back-btn:hover {
-                    box-shadow: 0 8px 24px rgba(108,117,125,0.3);
-                    transform: translateY(-2px) scale(1.03);
-                }
-                .visitor-count {
-                    font-size: 0.9em;
-                    color: #888;
-                    margin-bottom: 10px;
-                    text-align: left;
-                }
-            </style>
-            <script>
-                function toggleLike(profileId, btn) {
-                    fetch('/toggle_like/' + profileId, {method: 'POST'})
-                        .then(r => r.json())
-                        .then(data => {
-                            if (data.liked) {
-                                btn.classList.add('liked');
-                            } else {
-                                btn.classList.remove('liked');
-                            }
-                        });
-                }
-            </script>
-        </head>
-        <body>
-            <div class="visitor-count">Посетителей: {{ other_profiles|length }}</div>
-            <h1>Посетители кафе</h1>
-            {% if other_profiles %}
-                {% for profile in other_profiles %}
-                    <div class="visitor-card">
-                        <img src="{{ url_for('static', filename='uploads/' + profile.photo) }}" alt="Фото">
-                        <div class="visitor-info">
-                            <h2>{{ profile.name }}, {{ profile.age }}</h2>
-                            <p>{{ profile.hobbies[:50] }}{% if profile.hobbies|length > 50 %}...{% endif %}</p>
-                            <a href="/profile/{{ profile.id }}">Посмотреть анкету</a>
-                        </div>
-                        <button class="like-btn" title="Лайк" onclick="toggleLike({{ profile.id }}, this.querySelector('span'))">
-                            <span class="like-heart{% if profile.id in liked_ids %} liked{% endif %}">&#10084;</span>
-                        </button>
-                    </div>
-                {% endfor %}
-            {% else %}
-                <p>Пока нет других посетителей.</p>
-            {% endif %}
-            <a href="/" class="back-btn">← На главную</a>
-        </body>
-        </html>
-    ''', other_profiles=other_profiles, liked_ids=liked_ids)
-@app.route('/toggle_like/<int:profile_id>', methods=['POST'])
-def toggle_like(profile_id):
-    user_id = request.cookies.get('user_id')
-    if not user_id or profile_id >= len(profiles) or profiles[profile_id]['user_id'] == user_id:
-        return jsonify({'liked': False})
-    if profile_id in likes[user_id]:
-        likes[user_id].remove(profile_id)
-        profiles[profile_id]['likes'] = max(0, profiles[profile_id]['likes'] - 1)
-        liked = False
-    else:
-        likes[user_id].append(profile_id)
-        profiles[profile_id]['likes'] += 1
-        check_for_matches(user_id)
-        liked = True
-    return jsonify({'liked': liked})
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
